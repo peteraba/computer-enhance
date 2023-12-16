@@ -1,11 +1,19 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"os"
 )
 
-func check(e error) {
+func check(e error, allowedErrors ...error) {
+	for _, allowedError := range allowedErrors {
+		if e == allowedError {
+			return
+		}
+	}
+
 	if e != nil {
 		panic(e)
 	}
@@ -28,93 +36,88 @@ var registers = map[uint8][2]string{
 }
 
 const (
-	movPattern    = byte(0b10_0010)
+	movPattern = byte(0b10_0010)
+
 	regMovPattern = byte(0b11)
 )
 
 func main() {
-	inputFile, outputFile := getArgs()
+	inputFileName, outputFileName := getArgs()
 
-	source := readFile(inputFile)
+	fIn, err := os.Open(inputFileName)
+	check(err)
+	defer fIn.Close()
 
-	var content []byte
-	for i := 0; i < len(source); i += 2 {
-		h := source[i]
-		if h>>2 != movPattern {
-			fmt.Println("The first byte does not start with the pattern 100010.")
-			os.Exit(ERRCODE_INVALID_CONTENT)
+	fOut, err := os.Create(outputFileName)
+	check(err)
+	defer fOut.Close()
+
+	br := bufio.NewReader(fIn)
+
+	deassemble(br, fOut)
+}
+
+func deassemble(br io.ByteReader, fOut io.StringWriter) {
+	_, err := fOut.WriteString("bits 16\n")
+	check(err)
+
+	for {
+		b, err := br.ReadByte()
+		if err == io.EOF {
+			break
 		}
-		l := source[i+1]
-		if l>>6 != regMovPattern {
-			fmt.Println("The second byte does not start with the pattern 11.")
-			os.Exit(ERRCODE_INVALID_CONTENT)
+		check(err)
+
+		// process mov
+		if b>>2 == movPattern {
+			b2, err := br.ReadByte()
+			check(err, io.EOF)
+
+			_, err = fOut.WriteString(doMov(b, b2))
+			check(err)
+		} else {
+			fmt.Printf("skipping byte (0x%x, 0b%b)...", b, b)
 		}
-
-		// true = Register is Destination, false = Register is source.
-		d := (h & 0b00000010) == 0b00000010
-		// true = Word, false = byte.
-		w := h & 0b00000001
-
-		// Registry
-		reg := (l & 0b00_111_000) >> 3
-
-		// Registry or Memory
-		rm := l & 0b00_000_111
-
-		dest := registers[reg][w]
-		src := registers[rm][w]
-
-		// if d is false, then reg is source, rm is destination.
-		if !d {
-			src, dest = dest, src
-		}
-
-		result := fmt.Sprintf("mov %s, %s\n", dest, src)
-
-		content = append(content, []byte(result)...)
+	}
+}
+func doMov(h, l byte) string {
+	if l>>6 != regMovPattern {
+		fmt.Printf("The first byte is okay. Byte: 0x%x, 0b%b\n", h, h)
+		fmt.Printf("The second byte does not start with the pattern 11. Byte: 0x%x, 0b%b\n", l, l)
+		os.Exit(ERRCODE_INVALID_CONTENT)
 	}
 
-	writeFile(inputFile, outputFile, content)
+	// true = Register is Destination, false = Register is source.
+	d := (h & 0b00000010) == 0b00000010
+	// true = Word, false = byte.
+	w := h & 0b00000001
+
+	// Registry
+	reg := (l & 0b00_111_000) >> 3
+
+	// Registry or Memory
+	rm := l & 0b00_000_111
+
+	dest := registers[reg][w]
+	src := registers[rm][w]
+
+	// if d is false, then reg is source, rm is destination.
+	if !d {
+		src, dest = dest, src
+	}
+
+	return fmt.Sprintf("mov %s, %s\n", dest, src)
 }
 
 func getArgs() (string, string) {
 	if len(os.Args) < 2 {
-		fmt.Println("input input argument is missing")
+		fmt.Println("input argument is missing")
 		os.Exit(ERRCODE_INVALID_ARGS)
 	}
 	if len(os.Args) < 3 {
-		fmt.Println("output input argument is missing")
+		fmt.Println("output argument is missing")
 		os.Exit(ERRCODE_INVALID_ARGS)
 	}
 
 	return os.Args[1], os.Args[2]
-}
-
-func readFile(inputFile string) []byte {
-	dat, err := os.ReadFile(inputFile)
-	check(err)
-
-	if len(dat) == 0 {
-		panic("file is empty: " + inputFile)
-	}
-
-	if len(dat)%2 != 0 {
-		panic(fmt.Sprintf("file does not content is expected to be even length but got odd length. input: %s, length: %d", inputFile, len(dat)))
-	}
-
-	return dat
-}
-
-func writeFile(inputFile, outputFile string, content []byte) {
-	f, err := os.Create(outputFile)
-	check(err)
-	defer f.Close()
-
-	_ = inputFile
-
-	_, err = f.WriteString("bits 16\n")
-	check(err)
-
-	_, err = f.Write(content)
-	check(err)
 }
